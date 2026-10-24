@@ -166,15 +166,21 @@ python smoke_test.py http://127.0.0.1:8080
 
 > 沙箱限制：SSH 22 被封、无出网推送 → 上服务器命令需你在 SecureCRT 执行；部署文档 `deploy_server.md` 已备齐。
 
-> ⚠️ **致命易错点（已踩 2 次）**：服务器上所有 `vi .env` / `chmod` / `git status` 操作**必须先 `cd /opt/agent_memory_challenge`**。若提示符还是 `[... ~]$`（家目录），你写的 `.env` 会落到 `~/.env`，`deploy_server.sh` 跑起来会报「未发现 .env → 鉴权关闭」。`deploy_server.sh` 自身有 `cd "$(dirname "$0")"` 会跳回项目目录，但它找 `.env` 是在项目目录里找——所以 `.env` 必须先存在于项目目录。正确顺序：
+> ⚠️ **致命易错点（已踩 2 次）**：服务器上所有 `vi .env` / `chmod` / `git status` / `python *.py` 操作**必须先 `cd` 进项目目录**。若提示符还是 `[... ~]$`（家目录），你写的 `.env` 会落到 `~/.env`，`deploy_server.sh` 跑起来会报「未发现 .env → 鉴权关闭」；`python check_gateway.py` 还会因找不到本地模块报错。`deploy_server.sh` 自身有 `cd "$(dirname "$0")"` 会跳回项目目录，但它找 `.env` 是在项目目录里找——所以 `.env` 必须先存在于项目目录。
+>
+> **路径选择（重要）**：`/opt/agent_memory_challenge` 需要 root 写权限。**若你是 `topgo` 等非 root 用户，`/opt` 写不进会报 `Permission denied`** → 改用家目录 `~/agent_memory_challenge`。
+>
+> 正确顺序（非 root 示例）：
 > ```bash
-> cd /opt/agent_memory_challenge            # 必须先 cd！
-> cp .env.example .env                     # 或 mv ~/.env . 若已误建在家目录
-> vi .env                                  # 此时编辑的是 /opt/agent_memory_challenge/.env
+> cd ~
+> git clone https://github.com/anbeime/agent_memory_challenge.git ~/agent_memory_challenge
+> cd ~/agent_memory_challenge                 # 必须先 cd！
+> mv ~/.env ~/agent_memory_challenge/.env      # 若已误建在家目录
+> vi .env                                     # 此时编辑的是 ~/agent_memory_challenge/.env
 > chmod 600 .env
 > git status --porcelain | grep -E '\.env$' && echo "⚠️ 误跟踪" || echo "OK: .env 未被跟踪"
 > ```
-> 若已误建在 `~`：`mv ~/.env /opt/agent_memory_challenge/.env` 即可，密钥无需重填。
+> 非 root 跑 `bash deploy_server.sh` 会自动走 **nohup 分支**（不建 systemd 服务）；服务用 `nohup ... &` 后台运行，登出后仍在，但服务器重启不会自动拉起（评测窗口内勿重启机器）。
 
 ---
 
