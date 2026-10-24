@@ -71,7 +71,7 @@ Add/Search 支持 `Authorization: Bearer` / `Token` / `X-Api-Key`；`none` 仅�
 |---|---|
 | `app.py` | FastAPI：严格契约的 `/add` `/search` `/health`，含鉴权、幂等、回显 |
 | `store.py` | SQLite 持久化（同步落库）+ 内存 BM25 索引（按 `user_id` 隔离）+ 幂等/冲突 409 |
-| `retrieval.py` | BM25 检索；`SEMANTIC=1` 叠加 `text-embedding-v4` 向量 RRF；`RETRIEVAL_MODE=agent` 用米鱼菜菜 gateway（auto）做 LLM 重排（含超时+熔断降级） |
+| `retrieval.py` | BM25 检索；`SEMANTIC=1` 叠加 `text-embedding-v4` 向量 RRF；`RETRIEVAL_MODE=agent` 用米鱼菜菜 gateway（auto）做 LLM 重排（含超时+熔断）；`RETRIEVAL_MODE=card` 用四色卡实体图谱做联想扩展（见 §4.5） |
 | `llm.py` | 米鱼菜菜 gateway 客户端（OpenAI 兼容 chat/completions，`model=auto` 自动路由），仅 `agent` 模式用；内置 `ping()` 连通自检与连续失败熔断 |
 | `smoke_test.py` | 本地全链路冒烟（health→add→幂等→search），默认 `http://127.0.0.1:8080` |
 | `check_gateway.py` | **部署后跑一次**：验证网关可达 + agent 检索端到端（重排或安全回退 BM25） |
@@ -125,6 +125,18 @@ python smoke_test.py http://127.0.0.1:8080
 
 ---
 
+## 4.5 四色卡增强模式（RETRIEVAL_MODE=card，实验性）
+
+用**知易四色卡**体系提升记忆能力的实现：写入时把每条记忆规则化抽取成「卡」（实体/主题/类型/颜色/强制溯源 request_id），检索时用「BM25 主召回 + 实体图谱 1 跳联想扩展」做联想记忆。**返回给平台的 `content` 仍是原始记忆文本**（保真 + 反作弊安全），卡片元数据只用于排序/扩展。
+
+- **写入侧**（`store.py`）：`extract_entities()` 规则抽取实体（英文专有名词/长词/数字/引号串/≥2 字中文词，剔除功能词）；`_classify_card()` 判类型与四色（蓝=陈述/绿=动作/黄=疑问/红=风险）；`source` 强制填 `request_id`（四色卡溯源）。
+- **图谱侧**（`store.py`）：`entity_index[(user_id, entity)] -> {doc_id}` + `_doc_entities`；`graph_expand()` 沿共享实体 1 跳扩展，仅同 `user_id`、排除种子自身、`min_shared` 门控噪声。
+- **检索侧**（`retrieval.py`）：`_search_card()` = BM25(top_k×3) 主召回，再 `graph_expand` 补联想上下文填满 top_k。
+- **零 LLM、零延迟、纯本地**：不增加 `/add` 延迟，不引入云依赖；与 bm25/agent 互不干扰。
+- **验证（离线）**：查询 "what is my cat name" → BM25 命中 r1；因 r2 共享 `cat`+`luna` 两实体被联想召回（r2 不含 "name" 关键词）；r3 仅共享 `luna`(1) 在 `CARD_MIN_SHARED=2` 下正确排除；u2 记忆不串入 u1；返回 content 保真。
+
+> **使用策略**：先用 `bm25`/`agent` 跑通 Smoke/Full 锁定基线；四色卡作为实验增强，`smoke_test` 通过后单独切 `RETRIEVAL_MODE=card` 做 A/B。若提升显著，再打新 tag（如 `v1.1`）重新登记——**不要动已固定的 `v1-submission`**。
+
 ## 5. 提交流程（平台侧）
 
 1. 在 https://agentmemoryleaderboard.ai/evaluation 申请 Evaluation Key（已拿到 LDBD Key，直接绑定）。
@@ -156,12 +168,37 @@ python smoke_test.py http://127.0.0.1:8080
 
 ---
 
-## 7. 时间线（剩余 ≈8 天）
+## 6.5 公开仓库推送与固定 commit（开放方法赛道强制）
 
-- **D1（今天）**：本地冒烟跑通 ✅（本仓库已就绪）、确定部署方案。
-- **D2–D3**：部署公网 + 绑定 LDBD Key + 跑通 Smoke。
-- **D4–D5**：开启 `SEMANTIC=1` 语义模式（如有 DashScope key）调优；准备 GitHub 仓库 + 固定 commit。
-- **D6–D7**：提交 Full（Textual 学术赛道）；记录 commit/镜像版本。
+本目录已初始化为**独立公开仓库**（与父目录私有 `zhiyi` 仓库隔离），仓库内容即平台要求提交的代码。
+
+**本地已就绪（沙箱已完成，无需网络）**：
+- 分支 `main`，commit `3d2892e`（BM25 + 米鱼菜菜 gateway 重排）
+- 标签 `v1-submission`（平台登记的固定 commit）
+- 已验证跟踪树 17 文件，`git ls-files` 无 `.env` / `*.db` / 临时测试 → **密钥零泄露**
+
+**推送（你自家终端执行，沙箱无 GitHub 出网）**：
+```bash
+cd C:\D\zhiyi\agent_memory_challenge
+git remote add origin https://github.com/anbeime/agent_memory_challenge.git
+git branch -M main
+git push -u origin main
+git push origin v1-submission
+```
+> - 若 HTTPS 推送要求登录：用户名填 GitHub 账号、**密码填 PAT（personal access token，非账号密码）**；或先 `gh auth login`。
+> - 若 push 被拒（远程已含 README/LICENSE 初始提交）：先 `git pull origin main --allow-unrelated-histories` → 再 `git push -u origin main`。
+> - 之后**不要改 `v1-submission` 对应的代码**；微调请新开 commit + 新 tag（如 `v1.1`）并在平台重新登记。
+
+**平台登记填**：仓库 URL + 固定 commit（即 `v1-submission` tag 指向的 commit hash）。
+
+---
+
+## 7. 时间线（剩余 ≈7 天）
+
+- **D1（今天）**：本地冒烟跑通 ✅（本仓库已就绪并打 `v1-submission` tag）、确定部署方案。
+- **D2–D3**：推送公开仓库 + 绑定 LDBD Key + 部署公网端点 + 跑通 Smoke。
+- **D4–D5**：`check_gateway.py` 验证米鱼网关连通 + `agent` 模式重排链路；复核公开仓库与固定 commit 登记信息。
+- **D6–D7**：提交 Full（**开放方法赛道** · Textual）；记录 commit/tag 版本。
 - **D8（10-31）**：材料截止前复核：仓库、README、版本、日志齐全。
 
 ---

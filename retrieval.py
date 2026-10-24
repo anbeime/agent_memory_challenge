@@ -86,6 +86,10 @@ class RetrievalEngine:
             except Exception as e:
                 logger.warning(f"[retrieval] agent init failed ({e}) -> fallback bm25")
                 self.mode = "bm25"
+        # 四色卡模式：BM25 主召回 + 实体图谱 1 跳联想扩展（零 LLM、零延迟）
+        self.card_min_shared = int(os.getenv("CARD_MIN_SHARED", "2"))
+        if self.mode == "card":
+            logger.info(f"[retrieval] four-color-card mode (BM25 + graph expand, min_shared={self.card_min_shared})")
         # 向量缓存：doc_id -> vec
         self._vec_cache = {}
 
@@ -111,6 +115,8 @@ class RetrievalEngine:
 
     def search(self, user_id, query, top_k):
         top_k = max(1, min(int(top_k or 100), 100))
+        if self.mode == "card":
+            return self._search_card(user_id, query, top_k)
         if self.mode == "agent" and self.llm:
             return self._search_agent(user_id, query, top_k)
         bm25 = self.store.bm25_search(user_id, query, top_k * 3)
@@ -138,6 +144,28 @@ class RetrievalEngine:
         sem_ranks = scored[: top_k * 3]
         fused = rrf(bm25, sem_ranks)
         return [(did, score, self.store.docs.get(did, {}).get("created_at")) for did, score in fused[:top_k]]
+
+    # ---------------- 四色卡模式：BM25 主召回 + 实体图谱联想扩展 ----------------
+    def _search_card(self, user_id, query, top_k):
+        primary = self.store.bm25_search(user_id, query, top_k * 3)
+        if not primary:
+            return []
+        seed = [d[0] for d in primary]
+        expanded = self.store.graph_expand(user_id, seed, top_k, min_shared=self.card_min_shared)
+        result = []
+        seen = set()
+        # 主召回优先（按 BM25 分）
+        for did, score, ca in primary:
+            if did not in seen:
+                seen.add(did)
+                result.append((did, score, ca))
+        # 联想扩展填充剩余名额（按共享实体数排序，分置 0 以保证排在主召回之后）
+        for did, shared in expanded:
+            if did not in seen and len(result) < top_k:
+                seen.add(did)
+                ca = self.store.docs.get(did, {}).get("created_at")
+                result.append((did, 0.0, ca))
+        return result[:top_k]
 
     # ---------------- agent 模式：BM25 粗排 + gateway LLM 重排 ----------------
     def _search_agent(self, user_id, query, top_k):
