@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-dotenv>=1.0
+# 可选（语义模式）：取消注释以启用 text-embedding-v4 / 本地向量
+# dashscope>=1.14
+# sentence-transformers>=2.5
