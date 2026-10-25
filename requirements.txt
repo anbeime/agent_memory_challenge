@@ -1,6 +1,11 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-python-dotenv>=1.0
+# 锁定到确定支持 Python 3.8（CentOS7 / GLIBC2.17）的版本
+# 说明：fastapi>=0.116、uvicorn>=0.30、pydantic>=2.11 已放弃 3.8，
+#       在旧 Miniconda(Python3.8) 上必须用下列固定版本，pip 才能一次性装好。
+fastapi==0.115.6
+uvicorn[standard]==0.29.0
+python-dotenv==1.0.1
+pydantic==2.9.2
+
 # 可选（语义模式）：取消注释以启用 text-embedding-v4 / 本地向量
 # dashscope>=1.14
 # sentence-transformers>=2.5

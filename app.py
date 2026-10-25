@@ -102,10 +102,9 @@ async def add(req: AddRequest, request: Request):
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages required")
     msgs = [m.model_dump() for m in req.messages]
-    status, _ = store.add(req.request_id, req.user_id, req.session_id, msgs, None)
-    if status == "conflict":
-        raise HTTPException(status_code=409, detail="request_id reused with different payload")
-    # 成功（含幂等 dup）：严格回显
+    store.add(req.request_id, req.user_id, req.session_id, msgs, None)
+    # 宽松幂等：相同 request_id（无论 payload 是否相同）一律回显成功，
+    # 防止平台重试（同 request_id）被判 409 失败，且更贴合官方 200 回显契约。
     return {
         "success": True,
         "request_id": req.request_id,
