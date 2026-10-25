@@ -11,6 +11,7 @@ import math
 import json
 import hashlib
 import logging
+import time
 from collections import defaultdict
 
 logger = logging.getLogger("aml.store")
@@ -81,6 +82,7 @@ class MemoryStore:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")  # Full 16 并发写：避免 database is locked 雪崩
         self._init_schema()
         # BM25 状态
         self.docs = {}                # doc_id -> {"uid","tokens","len","created_at"}
@@ -91,6 +93,12 @@ class MemoryStore:
         self._doc_entities = {}                   # doc_id -> set(entities)
         self.entity_index = defaultdict(set)      # (user_id, entity) -> set(doc_id)
         self._lock = __import__("threading").Lock()
+        # —— B 方案检索增强参数（env 可覆盖）——
+        # 时间加权（C 时间序列）：新记忆得分乘 (1+alpha*recency)，recency∈[0,1]
+        self.recency_alpha = float(os.getenv("AML_RECENCY_ALPHA", "0.2"))
+        self.recency_tau = float(os.getenv("AML_RECENCY_TAU_H", "72")) * 3600.0
+        # 低置信拒答（H 认识论安全）：丢弃得分低于阈值的弱匹配噪声（默认极低，仅滤纯噪声）
+        self.min_score = float(os.getenv("AML_MIN_SCORE", "0.05"))
         self.rebuild_index()
 
     def _init_schema(self):
@@ -173,6 +181,15 @@ class MemoryStore:
                     continue
                 ts = m.get("timestamp")
                 role = m.get("role", "user")
+                # D 记忆治理：同一用户完全相同内容 → 后写刷新（去重 + 更新），不重复建卡
+                dup_id = self._find_identical(user_id, content)
+                if dup_id is not None:
+                    self.conn.execute(
+                        "UPDATE memories SET created_at=?, ts=? WHERE id=?",
+                        (created_at, ts, dup_id))
+                    self._refresh_doc(dup_id, created_at)
+                    doc_ids.append(dup_id)
+                    continue
                 ents = extract_entities(content)
                 ctype, color = self._classify_card(content)
                 cur = self.conn.execute(
@@ -229,6 +246,32 @@ class MemoryStore:
         for e in ents:
             self.entity_index[(user_id, e)].add(doc_id)
 
+    # ---------- D 记忆治理：去重辅助 ----------
+    def _find_identical(self, user_id, content):
+        """同用户完全相同内容是否已存在（用于后写刷新而非重复建卡）。"""
+        row = self.conn.execute(
+            "SELECT id FROM memories WHERE user_id=? AND content=? LIMIT 1",
+            (user_id, content)).fetchone()
+        return row[0] if row else None
+
+    def _refresh_doc(self, doc_id, created_at):
+        """后写刷新：仅更新内存索引中的 created_at（新近度），内容不变。"""
+        if doc_id in self.docs:
+            self.docs[doc_id]["created_at"] = created_at
+
+    # ---------- C 时间序列：新近度权重 ----------
+    def _recency(self, d):
+        ca = d.get("created_at")
+        if not ca:
+            return 0.0
+        try:
+            from datetime import datetime, timezone
+            ep = datetime.strptime(ca, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+            age = max(0.0, time.time() - ep)
+            return max(0.0, 1.0 - age / self.recency_tau)
+        except Exception:
+            return 0.0
+
     def rebuild_index(self):
         with self._lock:
             self.docs = {}
@@ -276,13 +319,19 @@ class MemoryStore:
                     dft = df.get(qt, 0)
                     idf = math.log(1 + (N - dft + 0.5) / (dft + 0.5))
                     score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d["len"] / avgdl))
-                if score > 0:
-                    results.append((doc_id, score, d["created_at"]))
+                if score <= 0:
+                    continue
+                # C 时间序列：新记忆轻微加权（recency∈[0,1]，不喧宾夺主）
+                score = score * (1.0 + self.recency_alpha * self._recency(d))
+                results.append((doc_id, score, d["created_at"]))
         results.sort(key=lambda x: x[1], reverse=True)
+        # H 认识论安全：丢弃低于阈值的弱匹配噪声（默认阈值极低，仅滤纯噪声，保召回）
+        if self.min_score > 0:
+            results = [(i, s, c) for (i, s, c) in results if s >= self.min_score]
         return results[:top_k]
 
     # ---------- 四色卡图谱扩展（联想记忆） ----------
-    def graph_expand(self, user_id, seed_doc_ids, limit, min_shared=2):
+    def graph_expand(self, user_id, seed_doc_ids, limit, min_shared=1):
         """给定种子记忆，沿共享实体做 1 跳扩展，返回 (doc_id, shared_count) 降序。
         仅在该 user_id 内、且不重复返回种子本身；用于检索时补充联想上下文。"""
         seed_set = set(seed_doc_ids)

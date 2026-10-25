@@ -4,7 +4,8 @@ Agent Memory Leaderboard — Add/Search/Health 适配服务
   POST /add  (alias /v1/memories/add)
   POST /search (alias /v1/memories/search)
   GET  /health
-鉴权：Authorization: Bearer / Token / X-Api-Key；AML_API_KEY 为空时放行（本地 smoke）。
+鉴权：平台实测不发送任何鉴权头 → 无 token 调用一律放行（开放端点）；
+仅当调用方主动携带 Authorization/X-Api-Key 时才与 AML_API_KEY/LDBD_KEY 匹配校验。
 """
 import os
 import sys
@@ -50,11 +51,11 @@ app = FastAPI(title="Antinet-AML-Adapter", version="0.1.0")
 
 
 # ---------------- 鉴权 ----------------
+# 重要（据 2026-10-25 平台实测 tcpdump 修正）：
+# 平台在 Smoke/Full 评测中对我们的 /add、/search 端点【不发送任何 Authorization / X-Api-Key】。
+# 抓包确认 POST /add 仅带 Host/User-Agent/Content-Type 等标准头，无任何鉴权头。
+# 因此端点对“无 token 调用”一律放行（开放端点）；仅当调用方主动携带 token 时才做匹配校验。
 def auth_ok(request: Request) -> bool:
-    # 接受 .env 中任一密钥（AML_API_KEY 或 LDBD_KEY），兼容平台两种变量命名
-    candidates = [t for t in (EXPECTED_TOKEN, LDBD_TOKEN) if t]
-    if not candidates:
-        return True  # 本地 smoke：无密钥则放行
     raw = request.headers.get("authorization", "").strip()
     token = raw
     # 去掉常见前缀（Bearer / Token / Basic），兼容"无前缀原始 token"
@@ -64,17 +65,17 @@ def auth_ok(request: Request) -> bool:
             break
     if not token:
         token = request.headers.get("x-api-key", "").strip()
+    # 平台不携带任何 token → 直接放行（开放端点）
     if not token:
-        # 脱敏日志：只记 scheme 与是否有 x-api-key，不泄露 token 明文
-        scheme = (raw.split(" ", 1)[0] if raw else "MISSING")
-        logger.warning("AUTH_FAIL no_token authorization_scheme=%s x_api_key_present=%s",
-                       scheme, bool(request.headers.get("x-api-key")))
-        return False
+        return True
+    # 调用方携带了 token：必须与 .env 中任一密钥匹配（防误配 / 防滥用）
+    candidates = [t for t in (EXPECTED_TOKEN, LDBD_TOKEN) if t]
+    if not candidates:
+        return True
     ok = any(hmac.compare_digest(token, c) for c in candidates)
     if not ok:
         scheme = (raw.split(" ", 1)[0] if raw else "MISSING")
-        logger.warning("AUTH_FAIL token_mismatch authorization_scheme=%s x_api_key_present=%s",
-                       scheme, bool(request.headers.get("x-api-key")))
+        logger.warning("AUTH_FAIL token_mismatch authorization_scheme=%s", scheme)
     return ok
 
 

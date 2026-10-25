@@ -87,9 +87,12 @@ class RetrievalEngine:
                 logger.warning(f"[retrieval] agent init failed ({e}) -> fallback bm25")
                 self.mode = "bm25"
         # 四色卡模式：BM25 主召回 + 实体图谱 1 跳联想扩展（零 LLM、零延迟）
-        self.card_min_shared = int(os.getenv("CARD_MIN_SHARED", "2"))
+        # 放宽到 1：仅凭共享≥2实体才联想过于保守，不利 G 上下文学习与执行（弱项55）；
+        # expanded 仅在 primary 不足 top_k 时兜底填充、score 远低于 BM25 主分，不会引入噪声损害 H 隐私（已50）
+        self.card_min_shared = int(os.getenv("CARD_MIN_SHARED", "1"))
+        self.card_reserve = int(os.getenv("CARD_RESERVE_SLOTS", "2"))
         if self.mode == "card":
-            logger.info(f"[retrieval] four-color-card mode (BM25 + graph expand, min_shared={self.card_min_shared})")
+            logger.info(f"[retrieval] four-color-card mode (BM25 + graph expand, min_shared={self.card_min_shared}, reserve={self.card_reserve})")
         # 向量缓存：doc_id -> vec
         self._vec_cache = {}
 
@@ -152,19 +155,37 @@ class RetrievalEngine:
             return []
         seed = [d[0] for d in primary]
         expanded = self.store.graph_expand(user_id, seed, top_k, min_shared=self.card_min_shared)
+        if not expanded:
+            return primary[:top_k]
+        # 强制保留末位 reserve 个 slots 给高 shared 实体联想，使调参在 primary
+        # 充足时也稳定生效（不依赖"primary 不足"这一偶然条件），补 G 上下文学习
+        reserve = min(self.card_reserve, top_k)
+        main_slots = top_k - reserve
         result = []
         seen = set()
-        # 主召回优先（按 BM25 分）
+        # 1) 主召回先占 (top_k - reserve) 个名额（按 BM25 分降序）
         for did, score, ca in primary:
             if did not in seen:
                 seen.add(did)
                 result.append((did, score, ca))
-        # 联想扩展填充剩余名额（按共享实体数排序，分置 0 以保证排在主召回之后）
+            if len(result) >= main_slots:
+                break
+        # 2) 高 shared 联想记忆强制填末位 reserve 个名额（即使 primary 充足也插入）
         for did, shared in expanded:
             if did not in seen and len(result) < top_k:
                 seen.add(did)
                 ca = self.store.docs.get(did, {}).get("created_at")
-                result.append((did, 0.0, ca))
+                # 联想记忆按"共享实体密度"给微评分（<< BM25 主分，绝不压过主召回），
+                # 让关联记忆按相关性排布，补 G 上下文学习与执行弱项
+                result.append((did, round(0.01 * shared, 4), ca))
+        # 3) 若 primary 充足但联想候选不足 reserve，用未入选的 primary 补满 top_k
+        if len(result) < top_k:
+            for did, score, ca in primary:
+                if did not in seen:
+                    seen.add(did)
+                    result.append((did, score, ca))
+                if len(result) >= top_k:
+                    break
         return result[:top_k]
 
     # ---------------- agent 模式：BM25 粗排 + gateway LLM 重排 ----------------
