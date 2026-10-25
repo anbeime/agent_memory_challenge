@@ -41,6 +41,7 @@ DB_PATH = os.getenv("AML_DB_PATH", str(Path(__file__).parent / "aml_mem.db"))
 # 优先读云平台注入的 $PORT（Cloud Run / 12-factor），否则回退 AML_PORT，默认 8080
 PORT = int(os.getenv("PORT") or os.getenv("AML_PORT", "8080"))
 EXPECTED_TOKEN = os.getenv("AML_API_KEY", "").strip()
+LDBD_TOKEN = os.getenv("LDBD_KEY", "").strip()
 
 store = MemoryStore(DB_PATH)
 engine = RetrievalEngine(store)
@@ -50,19 +51,31 @@ app = FastAPI(title="Antinet-AML-Adapter", version="0.1.0")
 
 # ---------------- 鉴权 ----------------
 def auth_ok(request: Request) -> bool:
-    if not EXPECTED_TOKEN:
-        return True
-    hdr = request.headers.get("authorization", "")
-    token = None
-    if hdr.startswith("Bearer "):
-        token = hdr[7:].strip()
-    elif hdr.startswith("Token "):
-        token = hdr[6:].strip()
-    if token is None:
+    # 接受 .env 中任一密钥（AML_API_KEY 或 LDBD_KEY），兼容平台两种变量命名
+    candidates = [t for t in (EXPECTED_TOKEN, LDBD_TOKEN) if t]
+    if not candidates:
+        return True  # 本地 smoke：无密钥则放行
+    raw = request.headers.get("authorization", "").strip()
+    token = raw
+    # 去掉常见前缀（Bearer / Token / Basic），兼容"无前缀原始 token"
+    for prefix in ("Bearer ", "Token ", "Basic "):
+        if token.startswith(prefix):
+            token = token[len(prefix):].strip()
+            break
+    if not token:
         token = request.headers.get("x-api-key", "").strip()
     if not token:
+        # 脱敏日志：只记 scheme 与是否有 x-api-key，不泄露 token 明文
+        scheme = (raw.split(" ", 1)[0] if raw else "MISSING")
+        logger.warning("AUTH_FAIL no_token authorization_scheme=%s x_api_key_present=%s",
+                       scheme, bool(request.headers.get("x-api-key")))
         return False
-    return hmac.compare_digest(token, EXPECTED_TOKEN)
+    ok = any(hmac.compare_digest(token, c) for c in candidates)
+    if not ok:
+        scheme = (raw.split(" ", 1)[0] if raw else "MISSING")
+        logger.warning("AUTH_FAIL token_mismatch authorization_scheme=%s x_api_key_present=%s",
+                       scheme, bool(request.headers.get("x-api-key")))
+    return ok
 
 
 # ---------------- 模型 ----------------
