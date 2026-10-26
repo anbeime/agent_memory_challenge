@@ -87,10 +87,11 @@ class RetrievalEngine:
                 logger.warning(f"[retrieval] agent init failed ({e}) -> fallback bm25")
                 self.mode = "bm25"
         # 四色卡模式：BM25 主召回 + 实体图谱 1 跳联想扩展（零 LLM、零延迟）
-        # 放宽到 1：仅凭共享≥2实体才联想过于保守，不利 G 上下文学习与执行（弱项55）；
-        # expanded 仅在 primary 不足 top_k 时兜底填充、score 远低于 BM25 主分，不会引入噪声损害 H 隐私（已50）
-        self.card_min_shared = int(os.getenv("CARD_MIN_SHARED", "1"))
-        self.card_reserve = int(os.getenv("CARD_RESERVE_SLOTS", "2"))
+        # min_shared=2：仅共享≥2 实体才联想，质量优先、噪声低（H 认识论安全）；
+        # 配合下方 _search_card 的「强制末位 reserve slots」，即便 primary 充足也稳定插入高 shared 联想，
+        # 补 G 上下文学习弱项，无需靠降低 min_shared 来换取联想召回。
+        self.card_min_shared = int(os.getenv("CARD_MIN_SHARED", "2"))  # 质量优先：共享≥2 实体才联想
+        self.card_reserve = int(os.getenv("CARD_RESERVE_SLOTS", "1"))  # 强制保留 1 个 slot 给高 shared 联想
         if self.mode == "card":
             logger.info(f"[retrieval] four-color-card mode (BM25 + graph expand, min_shared={self.card_min_shared}, reserve={self.card_reserve})")
         # 向量缓存：doc_id -> vec

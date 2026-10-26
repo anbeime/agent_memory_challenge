@@ -98,7 +98,7 @@ class MemoryStore:
         self.recency_alpha = float(os.getenv("AML_RECENCY_ALPHA", "0.2"))
         self.recency_tau = float(os.getenv("AML_RECENCY_TAU_H", "72")) * 3600.0
         # 低置信拒答（H 认识论安全）：丢弃得分低于阈值的弱匹配噪声（默认极低，仅滤纯噪声）
-        self.min_score = float(os.getenv("AML_MIN_SCORE", "0.05"))
+        self.min_score = float(os.getenv("AML_MIN_SCORE", "0.03"))  # 降为 0.03，滤掉更弱匹配提升 H 认识论安全
         self.rebuild_index()
 
     def _init_schema(self):

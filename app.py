@@ -141,17 +141,9 @@ async def search(req: SearchRequest, request: Request):
         content = store.get_content(doc_id)
         if content is None:
             continue
-        # Search 载荷截断：content 限长 ~300 字（语义完整截断），降出站带宽
-        # 64 worker 并发下，100 条 × 300 字 vs 100 条 × 2000 字，出站量差 6 倍+
-        truncated_content = content[:300]
-        # 避免截断在单词中间（简单回退到空格）
-        if len(content) > 300 and truncated_content[-1] not in (' ', '。', '！', '？', '.', '!', '?', '\n'):
-            truncated_content = truncated_content[:truncated_content.rfind(' ')]
-            if not truncated_content:
-                truncated_content = content[:100]  # 回退硬截断
         data.append({
             "id": str(doc_id),
-            "content": truncated_content,
+            "content": content,  # 恢复完整 content，记忆完整性对平台 LLM 理解上下文至关重要
             "score": round(float(score), 4),
             "created_at": created_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
