@@ -81,11 +81,14 @@ Add/Search 支持 `Authorization: Bearer` / `Token` / `X-Api-Key`；`none` 仅�
 
 默认 `RETRIEVAL_MODE=bm25`：**纯本地、离线、零云依赖**，已是稳健基线（ReFind 的 bm25 无密钥模式即排第 2）。
 
-> **📌 已定决策（2026-10-24）：冲名次/奖金 → 选「开放方法赛道」+ 米鱼菜菜免费网关**
-> - 理由：开放方法赛道**模型自由、零模型费**（网关 `auto` 免费），且**奖金池 US$22,000 仅在这条赛道评**；学术赛道强制 gpt-4o-mini（仍可按 token 付费跑，但我们目标不是它）。
-> - 落地：`.env` 已设 `RETRIEVAL_MODE=agent` + 填入 `GATEWAY_TOKEN`。网关是 LLM(chat) 端点，**非**本地 8910、也**非** embedding 端点。
-> - 韧性：网关单次超时 `GATEWAY_TIMEOUT=8s`（到点即回退 BM25）；连续失败 `GATEWAY_MAX_FAILURES=5` 次 → **熔断**，本进程剩余请求直接走 BM25，不再打网关。整进程共用一个网关实例（app.py 启动建一次），熔断在全部 `/search` 间共享。
-> - 部署后务必跑一次 `python check_gateway.py` 确认网关可达、重排链路通。
+> **📌 最终决策（2026-10-26，覆盖 10-24 的 agent 方案）：砍掉外部网关依赖 → 选 `card` 四色卡模式**
+> - 理由：平台 Full 实为「无模型可用」评测，**不依赖任何外部 LLM/embedding**；`card` = BM25 主召回 + 知易四色卡实体图谱 1 跳联想，零云依赖、零延迟、`content` 保真；直接吃知易四色卡能力补 **G 上下文学习**弱项。
+> - 锁定配置（`.env` + 代码默认一致，防止 `.env` 覆盖导致调参白做）：
+>   - `RETRIEVAL_MODE=card`
+>   - `CARD_MIN_SHARED=2`（联想质量优先：共享≥2 实体才联想）
+>   - `CARD_RESERVE_SLOTS=1`（强制保留 1 个 slot 给高 shared 联想，primary 充足也稳定生效）
+>   - `AML_MIN_SCORE=0.03`（滤掉更弱匹配，提升 H 认识论安全）
+> - 部署后**必须** `curl 127.0.0.1:8080/health` 自检 + 公网 `curl` 自检（见 §6 单发 Full 清单）。
 
 > **关于「模型自动切换」与赛道合规（重要）**
 > 适配服务里涉及「模型」的有三处，务必分清：
@@ -125,9 +128,12 @@ python smoke_test.py http://127.0.0.1:8080
 
 ---
 
-## 4.5 四色卡增强模式（RETRIEVAL_MODE=card，实验性）
+## 4.5 四色卡模式（RETRIEVAL_MODE=card，**当前生产模式**）
 
 用**知易四色卡**体系提升记忆能力的实现：写入时把每条记忆规则化抽取成「卡」（实体/主题/类型/颜色/强制溯源 request_id），检索时用「BM25 主召回 + 实体图谱 1 跳联想扩展」做联想记忆。**返回给平台的 `content` 仍是原始记忆文本**（保真 + 反作弊安全），卡片元数据只用于排序/扩展。
+
+> **📌 已升级为生产模式（2026-10-26）**：经 Full 失败根因分析（进程被 SSH 断开杀掉 → 端点不可达），最终选定 `card` 模式零依赖冲刺。锁定参数：`CARD_MIN_SHARED=2` + `CARD_RESERVE_SLOTS=1` + `AML_MIN_SCORE=0.03`（见上「最终决策」块）。
+> **⚠️ 配置一致性铁律**：`.env` 的 `CARD_MIN_SHARED`/`CARD_RESERVE_SLOTS`/`AML_MIN_SCORE` 会**覆盖**代码默认值。部署前务必核对 `.env` 与代码默认一致（card/2/1/0.03），否则调参等于没生效。
 
 - **写入侧**（`store.py`）：`extract_entities()` 规则抽取实体（英文专有名词/长词/数字/引号串/≥2 字中文词，剔除功能词）；`_classify_card()` 判类型与四色（蓝=陈述/绿=动作/黄=疑问/红=风险）；`source` 强制填 `request_id`（四色卡溯源）。
 - **图谱侧**（`store.py`）：`entity_index[(user_id, entity)] -> {doc_id}` + `_doc_entities`；`graph_expand()` 沿共享实体 1 跳扩展，仅同 `user_id`、排除种子自身、`min_shared` 门控噪声。
@@ -181,6 +187,37 @@ python smoke_test.py http://127.0.0.1:8080
 > git status --porcelain | grep -E '\.env$' && echo "⚠️ 误跟踪" || echo "OK: .env 未被跟踪"
 > ```
 > 非 root 跑 `bash deploy_server.sh` 会自动走 **nohup 分支**（不建 systemd 服务）；服务用 `nohup ... &` 后台运行，登出后仍在，但服务器重启不会自动拉起（评测窗口内勿重启机器）。
+
+---
+
+## 6.1 单发 Full 部署清单（2026-10-26 起，**仅一次机会**，失败不补）
+
+前一次 Full 耗 18h 以 `ADD_CONNECTION_FAILED` 失败，根因 = 进程被 SSH 断开（logind `KillUserProcesses`）静默杀死 → 端口无监听 → 平台 5 连 `PARTICIPANT_ENDPOINT_UNAVAILABLE`。**本次必须保证进程在 18h 评测窗口内绝对存活。**
+
+**① 进程存活（最高优先级）**
+- ✅ 首选 **systemd 托管**（`aml-adapter.service`，`Restart=always`，`WorkingDirectory` 指向项目目录）：SSH 断开 / 崩溃 / OOM 均自动拉起，赛事端点永不掉线。
+- ⚠️ `setsid nohup ... &` 在 CentOS `KillUserProcesses=yes` 下**不可靠**（SSH 断开仍会被杀）；仅作临时救急，**不可**长期依赖 18h Full。
+- ⚠️ **端口冲突排查**：若 systemd 服务已 active 又手动 `setsid` 起第二个实例，两进程抢 8080 会互相干扰、health 时通时断。重启前先 `pkill -f app.py` 清干净，确认只剩一个监听进程。
+- 校验：`systemctl status aml-adapter` + `ss -ltnp | grep 8080`（应仅 1 个 PID）+ `curl 127.0.0.1:8080/health` 返回 `{"status":"ok",...}`。
+
+**② 配置锁定（防调参白做）**
+- 部署前 `grep -E 'RETRIEVAL_MODE|CARD_MIN_SHARED|CARD_RESERVE_SLOTS|AML_MIN_SCORE' .env` 必须输出：
+  `RETRIEVAL_MODE=card` / `CARD_MIN_SHARED=2` / `CARD_RESERVE_SLOTS=1` / `AML_MIN_SCORE=0.03`。
+- 若 `.env` 是旧的 `agent`/1/2 配置 → 改成上述 2/1（或删掉这两行让代码默认 2/1 生效）。
+
+**③ 取最新代码**（GFW 间歇放行，优先 git；rz 兜底）
+```bash
+cd ~/agent_memory_challenge
+git fetch origin && git reset --hard origin/main      # 套用最新 commit（当前 0560139）
+grep -c "card_reserve" retrieval.py                   # ≥1 才说明工作区已更新
+```
+> rz 传 **LF** 文件：Windows 默认 CRLF 会让 bash 把行尾 `\r` 当字符 → `set: -` 报错。已传 CRLF 用 `sed -i 's/\r$//' app.py retrieval.py store.py` 修。
+
+**④ 升带宽**：EIP 仅 2Mbps，18h Full + 21750 docs 出站偏紧，评测前升带宽避免超时。
+
+**⑤ 重提 Full**：平台任务关闭后可重提。登记地址：`Add=http://39.108.254.228:8080/add`、`Search=http://39.108.254.228:8080/search`、`Health=http://39.108.254.228:8080/health`；并发 Add/Search 各 16、TopK=100。先跑 Smoke 通过再提交 Full。
+
+**⑥ 截止红线**：材料截止 **2026-10-31 23:59 UTC+8**；评测窗口 10-31~11-04。
 
 ---
 
