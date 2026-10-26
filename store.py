@@ -7,11 +7,14 @@ AML 记忆存储层
 import sqlite3
 import os
 import re
+import sys
 import math
 import json
 import hashlib
 import logging
 import time
+import pickle
+import threading
 from collections import defaultdict
 
 logger = logging.getLogger("aml.store")
@@ -30,6 +33,7 @@ def tokenize(text: str):
     text = text.lower()
     toks = re.split(r"[^a-z0-9\u4e00-\u9fff]+", text)
     out = []
+    intern = sys.intern  # 驻留去重：同一 token 全库只存一份字符串，显著降低索引内存（1.8G 小内存机关键）
     for t in toks:
         if not t:
             continue
@@ -37,7 +41,7 @@ def tokenize(text: str):
             continue
         if len(t) < 2:
             continue
-        out.append(t)
+        out.append(intern(t))
     return out
 
 
@@ -58,14 +62,15 @@ def extract_entities(text: str):
     if not text:
         return set()
     entities = set()
+    intern = sys.intern
     # 1) 英文专有名词（首字母大写）/ 长词 / 数字（含百分比）
     for m in re.finditer(r"[A-Z][a-zA-Z]+|[A-Za-z][a-zA-Z]{3,}|\d+(?:\.\d+)?%?", text):
-        entities.add(m.group(0).lower())
+        entities.add(intern(m.group(0).lower()))
     # 2) 引号内串（中英文引号）
     for m in re.finditer(r"[\"“『]([^\"”』]{1,24})[\"”』]", text):
         v = m.group(1).strip().lower()
         if v:
-            entities.add(v)
+            entities.add(intern(v))
     # 3) 分词结果再筛：中文>=2 字且非功能词；拉丁>=3 且非停用词
     for t in tokenize(text):
         if re.search(r"[\u4e00-\u9fff]", t):
@@ -92,14 +97,18 @@ class MemoryStore:
         # 四色卡：实体索引（图谱）+ 每文档实体缓存
         self._doc_entities = {}                   # doc_id -> set(entities)
         self.entity_index = defaultdict(set)      # (user_id, entity) -> set(doc_id)
-        self._lock = __import__("threading").Lock()
+        self._lock = threading.Lock()
+        self._idx_lock = threading.Lock()         # 索引加载/重建互斥（与读写锁分离）
+        self._index_ready = False
         # —— B 方案检索增强参数（env 可覆盖）——
         # 时间加权（C 时间序列）：新记忆得分乘 (1+alpha*recency)，recency∈[0,1]
         self.recency_alpha = float(os.getenv("AML_RECENCY_ALPHA", "0.2"))
         self.recency_tau = float(os.getenv("AML_RECENCY_TAU_H", "72")) * 3600.0
         # 低置信拒答（H 认识论安全）：丢弃得分低于阈值的弱匹配噪声（默认极低，仅滤纯噪声）
         self.min_score = float(os.getenv("AML_MIN_SCORE", "0.03"))  # 降为 0.03，滤掉更弱匹配提升 H 认识论安全
-        self.rebuild_index()
+        # 索引落盘：优先从 pickle 加载（<5s，重启端口秒开），无缓存才重建并落盘。
+        # —— 根治「重启 15 分钟不监听」：不再每次都从头 rebuild_index 阻塞 uvicorn 绑端口。
+        self.ensure_index()
 
     def _init_schema(self):
         self.conn.execute("""
@@ -291,6 +300,98 @@ class MemoryStore:
                         ents = extract_entities(content)
                 self._index_doc(doc_id, uid, content, created_at, ents)
         logger.info(f"[store] index rebuilt: N={self.N} docs, entity_edges={len(self.entity_index)}")
+
+    # ---------- 索引持久化（重启秒加载，根治重建阻塞端口） ----------
+    def _index_sig(self):
+        """廉价签名：文档数 + 最大 id + db mtime。任一变化即判定缓存失效需重建。"""
+        try:
+            cnt, mx = self.conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(id),0) FROM memories").fetchone()
+        except Exception:
+            cnt, mx = 0, 0
+        try:
+            mtime = int(os.path.getmtime(self.db_path)) if os.path.exists(self.db_path) else 0
+        except Exception:
+            mtime = 0
+        return (cnt, mx, mtime)
+
+    def _index_file(self):
+        return self.db_path + ".idx.pkl"
+
+    def save_index(self):
+        try:
+            cnt, mx, _ = self._index_sig()
+            payload = {
+                "sig": (cnt, mx),
+                "max_doc_id": max(self.docs.keys(), default=0),
+                "docs": self.docs,
+                "df": dict(self.df),
+                "N": self.N,
+                "avgdl": self.avgdl,
+                "_doc_entities": self._doc_entities,
+                "entity_index": {k: v for k, v in self.entity_index.items()},
+            }
+            tmp = self._index_file() + ".tmp"
+            with open(tmp, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, self._index_file())
+            logger.info(f"[store] index saved (docs<= {payload['max_doc_id']}, N={self.N}, edges={len(self.entity_index)})")
+        except Exception as e:
+            logger.warning(f"[store] index save failed: {e}")
+
+    def load_index(self):
+        """加载落盘索引；DB 只增不减（本服务从不删行），故支持增量补齐 id>max_doc_id 的新文档。
+        返回 True 表示索引已就绪（全量或 基座+增量）；False 表示需全量重建。"""
+        try:
+            p = self._index_file()
+            if not os.path.exists(p):
+                return False
+            with open(p, "rb") as f:
+                payload = pickle.load(f)
+            cnt, mx, _ = self._index_sig()
+            saved_max = int(payload.get("max_doc_id", 0))
+            if saved_max > mx:
+                logger.warning(f"[store] index newer than db? saved_max={saved_max} db_max={mx} -> rebuild")
+                return False
+            self.docs = payload["docs"]
+            self.df = defaultdict(int, payload["df"])
+            self.N = payload["N"]
+            self.avgdl = payload["avgdl"]
+            self._doc_entities = payload["_doc_entities"]
+            self.entity_index = defaultdict(set, payload["entity_index"])
+            # 增量补齐：只索引落盘之后新写入的文档（秒级，无需全量 rebuild）
+            n_new = 0
+            if mx > saved_max:
+                cur = self.conn.execute(
+                    "SELECT id, user_id, content, created_at, entities FROM memories WHERE id>? ORDER BY id",
+                    (saved_max,))
+                for doc_id, uid, content, created_at, ents_json in cur.fetchall():
+                    ents = set()
+                    if ents_json:
+                        try:
+                            ents = set(json.loads(ents_json))
+                        except Exception:
+                            ents = extract_entities(content)
+                    self._index_doc(doc_id, uid, content, created_at, ents)
+                    n_new += 1
+            logger.info(f"[store] index loaded from {p} (base N={payload['N']}, +{n_new} incremental, total N={self.N}, edges={len(self.entity_index)})")
+            return True
+        except Exception as e:
+            logger.warning(f"[store] index load failed ({e}) -> rebuild")
+            return False
+
+    def ensure_index(self):
+        """线程安全：已就绪直接返回；否则加载或重建，并落盘。"""
+        if self._index_ready:
+            return
+        with self._idx_lock:
+            if self._index_ready:
+                return
+            if not self.load_index():
+                logger.info("[store] building index (no usable cache) ...")
+                self.rebuild_index()
+                self.save_index()
+            self._index_ready = True
 
     # ---------- 检索（BM25） ----------
     def bm25_search(self, user_id, query, top_k, k1=1.5, b=0.75):
