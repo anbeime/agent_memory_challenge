@@ -131,7 +131,7 @@
 | 指标 | 值 |
 |---|---|
 | 提交 tag | `v2-coding-submission` |
-| 登记 SHA | `eeda7526b5d9beba7c7b2fdf189e3bce6d1e6c17` |
+| 登记 SHA | `17b0b851d7514d0e882544bbe8551b2ceb5e9a6e` |
 | 端点 | `http://39.108.254.228:8081/{add,search}` |
 | 关键改动 | `AML_TOKENIZER=code`（camelCase 边界切分 + 保留数字） |
 | 本地验证 | code 分词器 5/5 vs nlp 3/5（代码风格记忆 A/B） |
