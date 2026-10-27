@@ -95,7 +95,7 @@
 ## 三、待办动作清单（按优先级）
 
 1. ✅ **推仓库 + tag**：已完成（`main`→`ea30fa1`、tag `v2-textual-full`→`45eca11` 均已上传）
-2. 🔴 **平台登记 commit 改/确认为 `45eca1168f742db835f4a1e49d43202cbfdb480b`**（= `v2-textual-full`）
+2. 🔴 **平台登记 commit 填 tag `v2-textual-full`**（平台若只收 SHA，填该 tag 指向的 commit，见下方「版本取舍」）
 3. 🟡 **保持端点在线**：评测关闭（11-04）前勿停 `aml-adapter` 服务、勿重启机器
 4. 🟡 **确认材料截止前平台无未填项**：登录 AML 作业界面逐项检查（系统名 / 版本 / 三个 URL / 鉴权 / 并发）
 5. 🟢 可选：如需再战 Coding / Multimodal 赛道，须**各自独立**走一遍 Smoke→Full（冷却规则按赛道独立）
@@ -124,14 +124,14 @@
 | 维度得分 | H 75.17 / G 46.99 / I 40.21 / C 32.75 / D 28.49 / A 26.34 / B 23.60 / E 19.77 |
 | 本轮排名（用户反馈） | 约第 14 名 |
 | 提交 tag | `v2-textual-full` |
-| 登记 SHA | `45eca1168f742db835f4a1e49d43202cbfdb480b` |
+| 提交 tag | `v2-textual-full`（平台若只收 SHA → 用 git rev-parse 取值） |
 
 ### Coding（已就绪，待提交）
 
 | 指标 | 值 |
 |---|---|
 | 提交 tag | `v2-coding-submission` |
-| 登记 SHA | `17b0b851d7514d0e882544bbe8551b2ceb5e9a6e` |
+| 提交 tag | `v2-coding-submission`（平台若只收 SHA → 用 git rev-parse 取值） |
 | 端点 | `http://39.108.254.228:8081/{add,search}` |
 | 关键改动 | `AML_TOKENIZER=code`（camelCase 边界切分 + 保留数字） |
 | 本地验证 | code 分词器 5/5 vs nlp 3/5（代码风格记忆 A/B） |

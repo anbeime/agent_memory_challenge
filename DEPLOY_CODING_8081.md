@@ -42,7 +42,7 @@ git push origin main
 git push origin v2-coding-submission
 ```
 
-> Coding 登记用 SHA：`17b0b851d7514d0e882544bbe8551b2ceb5e9a6e`
+> Coding 登记用 SHA：tag `v2-coding-submission`
 
 ---
 
@@ -193,7 +193,7 @@ sudo systemctl restart aml-adapter-coding
 | 允许公开展示的信息 | ⬜ 待你确认 |
 | 鉴权声明 | **无鉴权**（端点对无 token 调用放行） |
 | 容量声明 | 并发 Add/Search 各 16；TopK 100；单请求检索 <50ms（零 LLM） |
-| 固定 commit | `17b0b851d7514d0e882544bbe8551b2ceb5e9a6e` |
+| 固定 commit | tag `v2-coding-submission` |
 | 原始工作引用 | 见 `README.md`「参考与致谢」 |
 
 > **Memory System Key 不用提供** —— 我们是无鉴权端点。
