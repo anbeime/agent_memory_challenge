@@ -5,14 +5,19 @@
 
 ---
 
-## ⛔ 三条铁律（先读，否则会踩）
+## ⛔ 四条铁律（先读，否则会踩）
 
-1. **绝对不要 `pkill -f app.py`** —— 8080 的 Textual 实例也叫 `app.py`，这一刀会把已出分的实例一起杀掉。
-   本清单**全程不出现** `pkill -f app.py`，只用 `systemctl` 精确控制 `aml-adapter-coding`。
-2. **sudo 命令逐条执行**，出现 `[sudo] password for topgo:` 时**手动输入密码回车**。
+1. **【最危险】`git reset --hard` 前必须先停服务** —— 本次提交把 `aml_mem.db-wal` / `aml_mem.db-shm` 移出了版本控制，reset 会**删除**它们。
+   服务运行中删除 = 可能丢未 checkpoint 的事务。**先 `systemctl stop` → SQLite 优雅关闭 → 再 reset**（完整序列见第 1 步）。
+2. **绝对不要 `pkill -f app.py`** —— 8080 的 Textual 实例也叫 `app.py`，这一刀会把已出分的实例一起杀掉。
+   本清单**全程不出现** `pkill -f app.py`，只用 `systemctl` 精确控制单个服务。
+3. **sudo 命令逐条执行**，出现 `[sudo] password for topgo:` 时**手动输入密码回车**。
    整段粘贴会把后续命令文本当成密码（你之前连续 3 次密码错就是这个原因）。
    本清单已把 sudo 命令与普通命令**分开成块**。
-3. **`git fetch` 只动远程指针，必须跟 `git reset --hard`** 才真正更新工作区。已合并在 `&&` 链里。
+4. **`git fetch` 只动远程指针，必须跟 `git reset --hard`** 才真正更新工作区。已合并在 `&&` 链里。
+
+> ✅ **关于 push 会不会覆盖远端**：不会。本次 push 是**纯快进**（远端无独有提交），且未用 `--force`。
+> git 的 push 语义上只能**追加** commit，除非显式 force——我们没用。远端历史只增不减。
 
 ---
 
@@ -46,19 +51,74 @@ git push origin v2-coding-submission
 
 ---
 
-## 第 1 步：拉代码（服务器，可整段粘贴，无 sudo）
+## 第 1 步：拉代码（服务器）——⚠️ **必须先停服务，再 reset**
+
+### 🔴 为什么不能直接 `git reset --hard`
+
+本轮代码提交里，我们把两个曾**被误跟踪**的 SQLite 边车文件移出了版本控制：
+
+```
+D  aml_mem.db-shm
+D  aml_mem.db-wal
+```
+
+服务器当前版本（`45eca11`）**跟踪着**这两个文件，而新版不再包含它们。
+`git reset --hard` 会删除"**当前被跟踪、但目标 commit 里不存在**"的文件 → **这两个 WAL/SHM 会被删掉**。
+
+| 文件 | reset 的影响 |
+|---|---|
+| `.env`（含 Key） | ✅ 不动（未被跟踪） |
+| **`aml_mem.db`（411M / 91097 条记忆）** | ✅ **不动**（`*.db` 已 gitignore） |
+| `aml_mem.db-wal` / `aml_mem.db-shm` | ⚠️ **会被删除** |
+
+**风险**：如果在服务**运行中**删除 WAL，未 checkpoint 的事务可能丢失。
+**规避**：**先停服务** → SQLite 优雅关闭并把 WAL 合并回主库 → 此时删除**零损失**（且下次启动会自动重建，属正常行为）。
+
+> 附带说明：这两个文件被跟踪本身就是隐患——每次 reset，git 都会拿仓库里那份 **10-25 的本地自测 WAL** 去覆盖服务器真实使用的 WAL。
+> 虽然 SQLite 靠 WAL 头校验能识别不匹配并忽略，不至于酿成灾难，但这正是"**记忆莫名变少**"这类怪现象的典型诱因。
+> 本次移出跟踪即**根治**。**不改写历史**（`filter-branch`/`rebase` 会改 commit hash，直接破坏平台登记的版本一致性）。
+
+### 安全操作序列（照抄执行）
 
 ```bash
 cd ~/agent_memory_challenge
+
+# ① 停服务 —— 让 SQLite 优雅关闭、checkpoint 到主库（关键前置）
+sudo systemctl stop aml-adapter
+sudo systemctl stop aml-adapter-coding 2>/dev/null
+
+# ② 备份主库（保险；411M 拷贝需几秒）
+cp aml_mem.db /tmp/aml_mem.db.bak.$(date +%s)
+ls -lh /tmp/aml_mem.db.bak.* | tail -1
+
+# ③ 此刻 reset 才安全
 git fetch origin && git reset --hard origin/main
-echo "--- 校验（两项都必须 ≥1）---"
+
+# ④ 验证：主库还在 / 数据还在 / wal 已移出跟踪（三项都要过）
+echo "--- 主库文件 ---"; ls -lh aml_mem.db
+echo "--- 记忆条数（应与停机前一致）---"
+python3 -c "import sqlite3;c=sqlite3.connect('aml_mem.db');print('memories:',c.execute('SELECT COUNT(*) FROM memories').fetchone()[0])"
+echo "--- 跟踪状态（应无输出）---"
+git ls-files | grep -E "\.db" || echo "✅ wal/shm 已移出跟踪"
+echo "--- 代码到位校验 ---"
 grep -c "_tokenize_code" store.py
-grep -c "AML_TOKENIZER" aml-adapter-coding.service
-echo "--- 确认 8080 还活着 ---"
-curl -s 127.0.0.1:8080/health
+grep AML_PORT aml-adapter-coding.service     # 须为 9090
 ```
 
-预期：`_tokenize_code` ≥1、`AML_TOKENIZER` ≥1、8080 返回 `{"status":"ok",...,"index_ready":true}`。
+**④ 的「记忆条数」是关键闸门**：必须与停机前一致（应为 91097 或更多）。
+**若数字对不上 → 立刻停手，不要继续，把输出贴回来**（`/tmp/aml_mem.db.bak.*` 就是回滚点）。
+
+### 再启动 Textual 实例
+
+```bash
+sudo systemctl start aml-adapter
+sleep 3
+curl -s 127.0.0.1:8080/health
+```
+须返回 `{"status":"ok",...,"index_ready":true}`。
+
+> ⚠️ 若 `index_ready` 变 false：说明索引 pkl 与新代码的分词器/签名不匹配，会在后台重建。
+> `aml_mem.db` 有 9 万条，全量重建在 1.8G 抖动机上要 10–20 分钟，**期间 8080 端口会先空着**——**这是正常的，不要反复重启**，等它建完即可。
 
 ---
 
