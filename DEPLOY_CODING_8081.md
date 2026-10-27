@@ -62,8 +62,64 @@ curl -s 127.0.0.1:8080/health
 
 ---
 
-## 第 2 步：内存决策（**先想清楚再往下走**）
+## 第 1.5 步：端口冲突处理（若 8081 已被占用）
 
+**先诊断，不要直接改端口。** 两种情况的处理方式完全相反：
+
+```bash
+# ① 先停掉我们的 coding 服务，避免它反复重启干扰诊断
+sudo systemctl stop aml-adapter-coding 2>/dev/null
+
+# ② 谁在占 8081？
+echo "=== 8081 占用者 ==="
+sudo ss -ltnp | grep ':8081' || echo "(8081 现在是空闲的)"
+
+# ③ 扫一批候选端口
+echo "=== 候选端口 ==="
+for p in 8081 8082 8083 8084 8090 18081 28081; do
+  if ss -ltn 2>/dev/null | grep -q ":$p "; then echo "  $p  占用"; else echo "  $p  空闲"; fi
+done
+```
+
+| 诊断结果 | 含义 | 处理 |
+|---|---|---|
+| ② 输出里有 `python`（我们的进程） | **是我们自己的 coding 服务在跑** —— 端口没冲突，是虚惊 | 直接 `sudo systemctl start aml-adapter-coding` 即可，无需换端口 |
+| ② 输出里是别的程序（nginx/docker/java/…） | 真的被占用 | 走下方「换端口」 |
+| ② 输出 `(8081 现在是空闲的)` | 之前那次是启动竞态，或占用者已退出 | 直接 `sudo systemctl start aml-adapter-coding` 观察 |
+
+### 换端口（端口完全可配置，改一处即可）
+
+`.py` 代码里**没有任何硬编码端口**（`app.py` 只读 `$PORT` / `$AML_PORT` 环境变量），所以换端口只需改 service 文件那一行。
+
+**选定一个第③步显示"空闲"的端口**（下面示例用 `8082`，你按实际替换数字）：
+
+```bash
+# ① 改 service 文件（服务器上的 unit 源，同时也是仓库文件）
+cd ~/agent_memory_challenge
+sed -i 's/^Environment=AML_PORT=8081/Environment=AML_PORT=8082/' aml-adapter-coding.service
+grep AML_PORT aml-adapter-coding.service      # 确认已改为 8082
+
+# ② 装回 systemd 并重启
+sudo cp aml-adapter-coding.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl reset-failed aml-adapter-coding 2>/dev/null   # 若之前因端口冲突已 failed，先清失败状态
+sudo systemctl start aml-adapter-coding
+sudo systemctl status aml-adapter-coding --no-pager | head -6
+```
+
+> ⚠️ 改完记得**平台登记时用新端口**：Add/Search = `http://39.108.254.228:8082/{add,search}`。
+> 同时把本仓库的 `aml-adapter-coding.service` 一起改掉并提交，保证"仓库 == 运行"。
+
+### 顺手确认 8080 没被动过
+
+```bash
+curl -s 127.0.0.1:8080/health
+```
+必须仍返回 `index_ready:true`。**8081 被占是 Coding 实例自己的事，与 8080 无关** —— 只要你没有执行过 `pkill -f app.py`，Textual 实例就是安全的。
+
+---
+
+## 第 2 步：内存决策（**先想清楚再往下走**）
 这台机器 **1.8G RAM + 4G swap**，Textual 实例的 9.1 万文档索引已占用较多。三选一：
 
 | 方案 | 做法 | 优点 | 风险 |
@@ -205,7 +261,8 @@ sudo systemctl restart aml-adapter-coding
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `systemctl status` 显示 `failed` | 启动即崩 | `journalctl -u aml-adapter-coding -n 50 --no-pager` 看 traceback；常见是 8081 被占 |
+| `systemctl status` 显示 `failed` | 启动即崩 | `journalctl -u aml-adapter-coding -n 50 --no-pager` 看 traceback；**端口冲突最常见**（见第 1.5 步）；清状态用 `sudo systemctl reset-failed aml-adapter-coding` |
+| 日志含 `Address already in use` | 端口被占 | 走第 1.5 步「换端口」 |
 | `ss` 无 8081 | 服务没起来 | 同上；确认 `daemon-reload` 执行过 |
 | 8081 health 无 `index_ready` | 还在建索引 | 空库应秒级；若卡住看日志是否在做全量重建 |
 | **8080 变成不通了** | 误杀了 Textual | `sudo systemctl start aml-adapter` 立即恢复 |
