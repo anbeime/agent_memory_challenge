@@ -40,27 +40,19 @@
 | 平台登记（日志） | `4d8e496` | 10-25 11:39 | V6.0 冲的 Smoke / Full |
 | 服务器实跑并出 30.97 | `45eca11` | 10-26 20:59 | ✅ 真实产生成绩的版本 |
 
-**处置（本地已完成）**：
+**处置（已完成）**：
 - ✅ 已在实跑版本上打新 tag：`v2-textual-full → 45eca11`
-- ⬜ **待你在自家终端执行**（沙箱无 GitHub 出网，`git ls-remote` 报 502）：
+- ✅ **已推送成功（2026-10-27 12:00）**：
+  - `45eca11..ea30fa1  main -> main`
+  - `[new tag]  v2-textual-full -> v2-textual-full`
+  - （`git-credential-manager.exe: No such file or directory` 为凭据助手无关警告，不影响推送）
+- ⬜ **待办：回平台把登记的 commit 改为 `45eca11`**（完整 SHA 见下）。若界面不允许改，则以平台重新登记新版本为准。
 
-```bash
-cd C:\D\zhiyi\agent_memory_challenge
-
-# 1) 推送 main 最新历史（45eca11）+ 新 tag
-git push origin main
-git push origin v2-textual-full
-
-# 2) 确认远端确有该 commit 与 tag
-git ls-remote origin main
-git ls-remote --tags origin
-
-# 3) 旧 tag 若已推到远端且平台登记过，二选一：
-#    a) 保留（不删）但平台改登记为 v2-textual-full
-#    b) 推送删除：git push origin :refs/tags/v1-submission（若平台未登记过才安全）
+**平台登记用的完整 SHA**：
 ```
-
-- ⬜ **回平台把登记的 commit 改为 `v2-textual-full` 指向的 `45eca11`**（若界面允许改；不允许则以最新提交 + 平台重新登记版本为准）。
+45eca1168f742db835f4a1e49d43202cbfdb480b
+```
+> 说明：`main` 顶端现为 `ea30fa1`（仅新增 README/材料清单两份文档，`app.py`/`store.py`/`retrieval.py` 与 `45eca11` **逐字节相同**）。登记的应是**实际跑出成绩的代码版本** `45eca11`；若平台按 `main` HEAD 校验并提示不符，可改登记 `ea30fa1`（代码等价），二者均可自证一致。
 
 > 原则：**平台登记的版本必须等于服务器实际运行的版本**。当前服务器跑的就是 `45eca11`（已 `git reset --hard origin/main` 过），所以登记 `45eca11` 即一致。
 
@@ -68,8 +60,8 @@ git ls-remote --tags origin
 
 ## 三、待办动作清单（按优先级）
 
-1. 🔴 **推仓库 + tag**：`git push origin main && git push origin v2-textual-full`（自家终端）
-2. 🔴 **平台登记 commit 改/确认为 `45eca11`**（= `v2-textual-full`）
+1. ✅ **推仓库 + tag**：已完成（`main`→`ea30fa1`、tag `v2-textual-full`→`45eca11` 均已上传）
+2. 🔴 **平台登记 commit 改/确认为 `45eca1168f742db835f4a1e49d43202cbfdb480b`**（= `v2-textual-full`）
 3. 🟡 **保持端点在线**：评测关闭（11-04）前勿停 `aml-adapter` 服务、勿重启机器
 4. 🟡 **确认材料截止前平台无未填项**：登录 AML 作业界面逐项检查（系统名 / 版本 / 三个 URL / 鉴权 / 并发）
 5. 🟢 可选：如需再战 Coding / Multimodal 赛道，须**各自独立**走一遍 Smoke→Full（冷却规则按赛道独立）
