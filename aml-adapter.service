@@ -1,12 +1,20 @@
 [Unit]
-Description=Antinet-AML Adapter (Agent Memory Challenge)
+Description=Antinet-AML Adapter — Textual track (Agent Memory Challenge Cycle 2)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/agent_memory_challenge
-ExecStart=/opt/agent_memory_challenge/.venv/bin/python app.py
+User=topgo
+WorkingDirectory=/home/topgo/agent_memory_challenge
+# 实跑解释器：base miniconda（依赖已装在此环境；.venv 缺 fastapi 会启动即崩）
+ExecStart=/home/topgo/miniconda3-aml/bin/python app.py
+# Textual 实例配置（.env 中同名键由此覆盖，见 app.py 的 os.environ.setdefault）
 Environment=AML_PORT=8080
+Environment=AML_DB_PATH=/home/topgo/agent_memory_challenge/aml_mem.db
+Environment=AML_TOKENIZER=nlp
+Environment=RETRIEVAL_MODE=card
+Environment=CARD_MIN_SHARED=2
+Environment=CARD_RESERVE_SLOTS=1
 Restart=always
 RestartSec=3
 
