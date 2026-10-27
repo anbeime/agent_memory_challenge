@@ -88,11 +88,15 @@
 - 禁止硬编码公开题目、禁止跨样本共享状态、禁止注入提示词操纵
 - 禁止把金标答案写进检索、禁止用 `options` 反推答案
 - Add / Search 必须使用**完全相同**的 `user_id`
-- `.env`（含 LDBD Key / 网关令牌）**绝不进入公开仓库**（已由 `.gitignore` 忽略，已验证 21 个跟踪文件中无密钥）
+- `.env`（含 LDBD Key / 网关令牌）**绝不进入公开仓库**（已由 `.gitignore` 忽略，已验证 23 个跟踪文件中无 `.env` / `*.db` / `*.db-wal` / `*.db-shm` / `*.pkl`）
+  - ⚠️ 2026-10-27 修复：`aml_mem.db-wal` / `aml_mem.db-shm` 此前**曾被误跟踪**（`*.db` 通配不到 WAL/SHM 后缀），WAL 含未 checkpoint 的记忆数据。已 `git rm --cached` 前向清理并在 `.gitignore` 补 `*.db-wal` / `*.db-shm` / `*.db-journal`。
+  - **未改写历史**（`git filter-branch` / `rebase` 会改 commit hash，直接破坏平台已登记的版本一致性）。旧 commit 中仍残留这两个文件的快照，但由于它们是空库/本地自测数据且不含真实评测记忆，风险可控。若你要求彻底清除，须新开仓库或联系平台重新登记 commit。
 
 ---
 
 ## 五、当前成绩留档
+
+### Textual（已跑完）
 
 | 指标 | 值 |
 |---|---|
@@ -100,5 +104,18 @@
 | Full（实跑版本 `45eca11`） | **30.97** · 状态成功 · 评分 9602/9602 |
 | 维度得分 | H 75.17 / G 46.99 / I 40.21 / C 32.75 / D 28.49 / A 26.34 / B 23.60 / E 19.77 |
 | 本轮排名（用户反馈） | 约第 14 名 |
+| 提交 tag | `v2-textual-full` |
+| 登记 SHA | `45eca1168f742db835f4a1e49d43202cbfdb480b` |
+
+### Coding（已就绪，待提交）
+
+| 指标 | 值 |
+|---|---|
+| 提交 tag | `v2-coding-submission` |
+| 登记 SHA | `0e94be77706176fe056e750cdc0fb3e81424b01a` |
+| 端点 | `http://39.108.254.228:8081/{add,search}` |
+| 关键改动 | `AML_TOKENIZER=code`（camelCase 边界切分 + 保留数字） |
+| 本地验证 | code 分词器 5/5 vs nlp 3/5（代码风格记忆 A/B） |
+| 状态 | ⬜ 服务器尚未部署 8081 实例；未跑 Smoke/Full |
 
 **维度解读**：H（认识论安全与隐私）75.17 显著领先，得益于 card 模式 `min_shared=2` + 跨用户隔离 + 无 LLM 幻觉；A/B/E 偏弱源于零模型 BM25 无语义层（对照：Smoke 跑 agent 引擎时 B/E 均为 100）。提分方向 = 语义层（异步 LLM 重排 + embedding 向量），非调参。
