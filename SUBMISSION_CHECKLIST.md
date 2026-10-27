@@ -132,9 +132,9 @@
 |---|---|
 | 提交 tag | `v2-coding-submission` |
 | 提交 tag | `v2-coding-submission`（平台若只收 SHA → 用 git rev-parse 取值） |
-| 端点 | `http://39.108.254.228:8081/{add,search}` |
+| 端点 | `http://39.108.254.228:9090/{add,search}` |
 | 关键改动 | `AML_TOKENIZER=code`（camelCase 边界切分 + 保留数字） |
 | 本地验证 | code 分词器 5/5 vs nlp 3/5（代码风格记忆 A/B） |
-| 状态 | ⬜ 服务器尚未部署 8081 实例；未跑 Smoke/Full |
+| 状态 | ⬜ 服务器尚未部署 9090 实例；未跑 Smoke/Full |
 
 **维度解读**：H（认识论安全与隐私）75.17 显著领先，得益于 card 模式 `min_shared=2` + 跨用户隔离 + 无 LLM 幻觉；A/B/E 偏弱源于零模型 BM25 无语义层（对照：Smoke 跑 agent 引擎时 B/E 均为 100）。提分方向 = 语义层（异步 LLM 重排 + embedding 向量），非调参。

@@ -1,7 +1,7 @@
-# Coding 赛道 8081 部署 — 可直接粘贴清单
+# Coding 赛道部署（端口 9090）— 可直接粘贴清单
 
 > 目标：在**不影响**正在跑 8080（Textual，已出分 30.97）的前提下，起一个独立的 Coding 实例。
-> 三赛道共用同一份代码，靠环境变量区分：**8081 / `aml_code.db` / `AML_TOKENIZER=code`**。
+> 三赛道共用同一份代码，靠环境变量区分：**9090 / `aml_code.db` / `AML_TOKENIZER=code`**。
 
 ---
 
@@ -18,13 +18,13 @@
 
 ## ⚙️ 一个必须先理解的点：端口为什么不会撞车
 
-`.env` 里写着 `AML_PORT=8080`，而 Coding 实例要跑 8081。**两者不冲突**，原理是：
+`.env` 里写着 `AML_PORT=8080`，而 Coding 实例要跑 9090。**两者不冲突**，原理是：
 
-`app.py` 用 `os.environ.setdefault()` 加载 `.env` —— 而 systemd 在启动进程**之前**就把 `Environment=AML_PORT=8081` 注入了进程环境，
-所以 `os.environ` 里**已经有** 8081，`setdefault` 遇到已存在的键**不会覆盖** → Coding 实例读到的就是 8081。
+`app.py` 用 `os.environ.setdefault()` 加载 `.env` —— 而 systemd 在启动进程**之前**就把 `Environment=AML_PORT=9090` 注入了进程环境，
+所以 `os.environ` 里**已经有** 9090，`setdefault` 遇到已存在的键**不会覆盖** → Coding 实例读到的就是 9090。
 
 **两条推论，务必记住**：
-- ✅ 通过 `systemctl restart aml-adapter-coding` 启动 → 永远 8081，安全。
+- ✅ 通过 `systemctl restart aml-adapter-coding` 启动 → 永远 9090，安全。
 - ⛔ **不要**在项目目录手动 `~/miniconda3-aml/bin/python app.py` —— 那样没有 systemd 注入，会读 `.env` 的 8080，
   与 Textual 实例**抢端口**，要么启动失败、要么把线上实例搞乱。
 
@@ -90,14 +90,14 @@ sudo ss -ltnp | grep -E ':(808[0-9]|809[0-9]|1808[0-9]|1809[0-9]) ' || echo "(�
 ### ② 自动找一个真正空闲的端口
 
 ```bash
-# 扫描 8081-8099 + 18080-18099，列出所有空闲端口
+# 扫描候选区间，列出所有空闲端口
 echo "=== 空闲端口候选 ==="
-for p in $(seq 8081 8099) $(seq 18080 18099); do
+for p in $(seq 9090 9110) $(seq 18080 18099); do
   ss -ltn 2>/dev/null | grep -q ":$p " || echo "$p"
 done | head -20
 ```
 
-挑第一个（比如 `8083`）用。
+挑第一个（比如 `9092`）用。
 
 ### ③ 🔴 关键一步：验证该端口**公网可达**（比"空闲"更重要）
 
@@ -107,7 +107,7 @@ done | head -20
 
 ```bash
 # 把 PORT 换成你选定的端口
-curl -s --max-time 8 http://39.108.254.228:8083/health
+curl -s --max-time 8 http://39.108.254.228:9092/health
 ```
 
 - ✅ 返回 `{"status":"ok",...}` → 安全组放行，继续
@@ -131,8 +131,8 @@ curl -s --max-time 8 http://39.108.254.228:8083/health
 
 ```bash
 cd ~/agent_memory_challenge
-# 把 8083 换成你选定的端口
-sed -i 's/^Environment=AML_PORT=.*/Environment=AML_PORT=8083/' aml-adapter-coding.service
+# 把 9092 换成你选定的端口
+sed -i 's/^Environment=AML_PORT=.*/Environment=AML_PORT=9092/' aml-adapter-coding.service
 grep AML_PORT aml-adapter-coding.service
 
 sudo cp aml-adapter-coding.service /etc/systemd/system/
@@ -197,11 +197,11 @@ sudo systemctl status aml-adapter-coding --no-pager
 ## 第 4 步：验证（可整段粘贴，无 sudo）
 
 ```bash
-echo "=== 8081 监听 ==="; ss -ltnp | grep 8081
-echo "=== 8081 health ==="; curl -s 127.0.0.1:8081/health; echo
+echo "=== 9090 监听 ==="; ss -ltnp | grep 9090
+echo "=== 9090 health ==="; curl -s 127.0.0.1:9090/health; echo
 echo "=== 8080 未被影响 ==="; curl -s 127.0.0.1:8080/health; echo
 echo "=== 公网可达（两个都要）==="
-curl -s --max-time 8 http://39.108.254.228:8081/health; echo
+curl -s --max-time 8 http://39.108.254.228:9090/health; echo
 curl -s --max-time 8 http://39.108.254.228:8080/health; echo
 echo "=== 内存 ==="; free -m
 echo "=== 分词器确认 ==="; sudo -n true 2>/dev/null; journalctl -u aml-adapter-coding -n 20 --no-pager 2>/dev/null | grep -iE "four-color-card|tokenizer|error" || echo "(journalctl 需权限，改用下面这条)"
@@ -214,18 +214,18 @@ grep -iE "four-color-card" ~/agent_memory_challenge/aml.log | tail -3
 ```
 
 **判读要点**：
-- `ss` 须见到 `0.0.0.0:8081`
-- 8081 health 须 `"index_ready":true`（**空库启动，秒级就绪**，不会有 Textual 那样 10–20 分钟的全量重建）
+- `ss` 须见到 `0.0.0.0:9090`
+- 9090 health 须 `"index_ready":true`（**空库启动，秒级就绪**，不会有 Textual 那样 10–20 分钟的全量重建）
 - **8080 health 必须仍然 ok** —— 这是"没误伤 Textual"的铁证
 - `free -m` 若 `available` < 200MB，考虑切方案 B 串行
 
 ### 端到端写读自检（强烈建议，5 秒）
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/add -H 'Content-Type: application/json' \
+curl -s -X POST http://127.0.0.1:9090/add -H 'Content-Type: application/json' \
   -d '{"request_id":"code_selftest_1","user_id":"code_u","session_id":"code_s","messages":[{"role":"user","content":"Fixed TypeError in getUserById: userId was None. Added guard in userService.validateToken()."}]}'
 echo
-curl -s -X POST http://127.0.0.1:8081/search -H 'Content-Type: application/json' \
+curl -s -X POST http://127.0.0.1:9090/search -H 'Content-Type: application/json' \
   -d '{"query":"validate token","user_id":"code_u","top_k":5}'
 echo
 ```
@@ -267,8 +267,8 @@ sudo systemctl restart aml-adapter-coding
 
 1. **提交评测申请**：参评类型 = **Coding · 开源方法**
 2. 端点填：
-   - Add = `http://39.108.254.228:8081/add`
-   - Search = `http://39.108.254.228:8081/search`
+   - Add = `http://39.108.254.228:9090/add`
+   - Search = `http://39.108.254.228:9090/search`
 3. **运行 Smoke** → 通过后跑 **Full**
 4. 复核通过 → 进 Coding 榜
 
@@ -298,8 +298,8 @@ sudo systemctl restart aml-adapter-coding
 |---|---|---|
 | `systemctl status` 显示 `failed` | 启动即崩 | `journalctl -u aml-adapter-coding -n 50 --no-pager` 看 traceback；**端口冲突最常见**（见第 1.5 步）；清状态用 `sudo systemctl reset-failed aml-adapter-coding` |
 | 日志含 `Address already in use` | 端口被占 | 走第 1.5 步「换端口」 |
-| `ss` 无 8081 | 服务没起来 | 同上；确认 `daemon-reload` 执行过 |
-| 8081 health 无 `index_ready` | 还在建索引 | 空库应秒级；若卡住看日志是否在做全量重建 |
+| `ss` 无 9090 | 服务没起来 | 同上；确认 `daemon-reload` 执行过 |
+| 9090 health 无 `index_ready` | 还在建索引 | 空库应秒级；若卡住看日志是否在做全量重建 |
 | **8080 变成不通了** | 误杀了 Textual | `sudo systemctl start aml-adapter` 立即恢复 |
 | 日志出现 `MemoryError` / OOM | 内存不足 | 切方案 B 串行，或加第 5 步内存上限 |
 | `git reset` 后 grep 仍是 0 | GFW 截断，没拉到 | 重试 `git fetch`；或用 SecureFX 传 `store.py` 等文件（**须 LF**） |

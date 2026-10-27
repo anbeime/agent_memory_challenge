@@ -11,7 +11,7 @@
 
 | 维度 | Textual（已跑完 30.97） | Coding（本次接入） |
 |---|---|---|
-| 端口 | 8080 | **8081** |
+| 端口 | 8080 | **9090** |
 | DB | `aml_mem.db` | **`aml_code.db`**（隔离，防 user_id 空间污染） |
 | 分词器 | `nlp`（自然语言） | **`code`（代码感知）** |
 | 检索模式 | `card`（四色卡图谱） | `card`（复用，同一套机制） |
@@ -49,10 +49,10 @@ sudo cp aml-adapter-coding.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now aml-adapter-coding
 
-# ④ 自检（注意端口 8081）
+# ④ 自检（注意端口 9090）
 sudo systemctl status aml-adapter-coding --no-pager     # 须 active (running)
-ss -ltnp | grep 8081                                    # 须见 0.0.0.0:8081
-curl 127.0.0.1:8081/health                              # 须 index_ready:true
+ss -ltnp | grep 9090                                    # 须见 0.0.0.0:9090
+curl 127.0.0.1:9090/health                              # 须 index_ready:true
 grep -i "four-color-card" aml.log                       # 确认 card 模式 + 分词器
 ```
 
@@ -79,8 +79,8 @@ grep -i "four-color-card" aml.log                       # 确认 card 模式 + �
 
 1. **提交评测申请**，参评类型 = Coding · 开源方法
 2. 填 **已部署的 Coding 端点**：
-   - Add = `http://39.108.254.228:8081/add`
-   - Search = `http://39.108.254.228:8081/search`
+   - Add = `http://39.108.254.228:9090/add`
+   - Search = `http://39.108.254.228:9090/search`
    3. **运行 Smoke** → 通过后跑 **Full**
 4. 复核通过 → 进 Coding 榜
 
@@ -109,7 +109,7 @@ grep -i "four-color-card" aml.log                       # 确认 card 模式 + �
 | 5 | 方法说明 | 见 `README.md`（card 模式 + code 分词器） |
 | 6 | 允许公开展示的信息 | ⬜ 待你确认 |
 | 7 | 完整提交说明 | 本文件 + `RUNBOOK.md` |
-| 8 | 已部署的 Add/Search API | 8081 端点 |
+| 8 | 已部署的 Add/Search API | 9090 端点 |
 | 9 | 鉴权与容量声明 | **无鉴权**；容量见下方 |
 | 10 | 公开仓库 + 固定 commit | 同一仓库，需为 Coding 打独立 tag |
 | 11 | **原始工作引用** | ⬜ **需补**（见下） |
