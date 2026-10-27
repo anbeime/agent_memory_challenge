@@ -1,0 +1,22 @@
+[Unit]
+Description=Antinet-AML Adapter — Coding track (Agent Memory Challenge Cycle 2)
+After=network.target
+
+[Service]
+Type=simple
+User=topgo
+WorkingDirectory=/home/topgo/agent_memory_challenge
+# 与 Textual 实例（aml-adapter.service, 8080）完全隔离：独立端口 / 独立 DB / 代码分词器。
+# app.py 用 os.environ.setdefault 加载 .env，故此处注入的环境变量优先于 .env 中的同名键。
+Environment=AML_PORT=8081
+Environment=AML_DB_PATH=/home/topgo/agent_memory_challenge/aml_code.db
+Environment=AML_TOKENIZER=code
+Environment=RETRIEVAL_MODE=card
+Environment=CARD_MIN_SHARED=2
+Environment=CARD_RESERVE_SLOTS=1
+ExecStart=/home/topgo/miniconda3-aml/bin/python app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

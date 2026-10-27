@@ -1,0 +1,12 @@
+# 行尾规范化：Linux 侧文件必须 LF（systemd / bash 遇到 \r 会解析失败）
+# Windows 批处理必须 CRLF，否则 cmd 执行异常
+*.bat text eol=crlf
+
+*.service    text eol=lf
+*.sh         text eol=lf
+*.py         text eol=lf
+*.md         text eol=lf
+*.txt        text eol=lf
+.env.example text eol=lf
+.gitattributes text eol=lf
+.gitignore   text eol=lf

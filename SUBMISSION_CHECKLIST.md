@@ -14,6 +14,18 @@
 > "AML reviews result validity, **version consistency**, and compliance status before leaderboard publication."
 > "Once a Full evaluation begins, the submitted **code, image, endpoint, authentication method, and operating conditions must remain stable**."
 
+**官方中文细则补充（2026-10 最新，优先级高于早期英文公告）**：
+- **第二期不接受「只提交 GitHub 仓库 / Docker 镜像 / 启动说明」并由 AML 代为部署** → 必须**自托管 Add/Search API**。我们已满足。
+- 「共同材料」：系统名称与版本、**联系人**、机构或团队、拟参评类型、方法说明、允许公开展示的信息、完整提交说明。
+- 「开源方法」追加：已部署 API、**鉴权与容量声明**、公开仓库、**固定 commit**、**原始工作引用**、**方法改动说明**。
+- 两个 Key 由**不同方**签发，**不得**放入公开仓库/URL/截图/邮件正文/群聊：
+  | 凭证 | 签发方 | 用途 | 我们 |
+  |---|---|---|---|
+  | Eval / Leaderboard Key | AML 平台 | 验证身份、跑评测、看私有结果 | ✅ 已持有（`LDBD_KEY`） |
+  | Memory System Key | **参赛方自己** | 供平台访问我们的 API | ❌ **无需**（端点无鉴权，属"无鉴权接口"） |
+- **奖金（人民币）**：总额 **150,000 元**，三赛道各 50,000 元。每赛道：一等 1 名 20,000 元；二等 2 名各 8,000 元；三等 3 名各 3,000 元；最佳技术创新奖 1 名 5,000 元。**仅开源方法榜可评奖**，商业产品榜不参与。
+- **有效提交五要件**：材料完整 ✓ / Smoke 通过 ✓ / Full 完成 ✓ / **版本一致** / 复核通过。
+
 推导出的材料清单（**没有独立的 PDF 申请表**，全部在平台侧作业界面完成）：
 
 | # | 材料 | 官方依据 | 状态 |
@@ -25,6 +37,9 @@
 | 5 | Full 评测完成 | "Start a formal Full evaluation" | ✅ 30.97 · 成功（2026-10-27） |
 | 6 | 版本一致性（登记版本 == 实际运行版本） | "version consistency" | 🔴 **必须处理** |
 | 7 | 运行条件稳定（端点 / 鉴权 / 并发） | "must remain stable" | ✅ 已 systemd 托管 |
+| 8 | 联系人 / 拟参评类型 / 可公开信息 | 官方「共同材料」 | ⬜ **待你填** |
+| 9 | 原始工作引用 + 方法改动说明 | 官方「开源方法」+ 基本要求第3条 | ✅ 已补入 README「参考与致谢」 |
+| 10 | 鉴权与容量声明 | 官方「开源方法」 | ✅ 无鉴权 + 容量见 CODING_TRACK_ONBOARDING.md |
 
 ---
 

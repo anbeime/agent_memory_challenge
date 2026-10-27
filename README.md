@@ -51,6 +51,22 @@ python smoke_test.py http://127.0.0.1:8080
 详见 `RUNBOOK.md`（自有服务器 / Cloudflare Tunnel / GCP 等方案与提交流程）。
 提交平台需公开仓库 + 固定 commit + 公网托管 API。材料截止 **2026-10-31 23:59 UTC+8**，评测关闭 **2026-11-04 23:59 UTC+8**。
 
+## 参考与致谢
+
+按赛事要求「复用论文、仓库或代码时，必须注明原作者、技术报告和全部方法改动」，逐条披露：
+
+| 组件 | 原始出处 | 本实现的改动 |
+|---|---|---|
+| BM25 检索排序 | Robertson & Zaragoza, *The Probabilistic Relevance Framework: BM25 and Beyond*, Foundations and Trends in IR (2009) | 加入时间衰减加权（`_recency`，α=0.2 / τ=72h）与低分阈值拒答（`AML_MIN_SCORE`） |
+| RRF 倒数排名融合 | Cormack, Clarke & Buettcher, *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*, SIGIR 2009 | 仅 `SEMANTIC=1` 时启用；本提交版本**未开启** |
+| 四色卡实体图谱 / 联想扩展 | **本团队原创**（知易 Antinet 体系） | 无外部复用 |
+| 代码感知分词（camelCase 边界切分） | **本团队原创**（本项目实现） | 无外部复用 |
+| FastAPI / uvicorn / pydantic | 上游开源项目（MIT / BSD） | 未修改，仅作框架使用 |
+
+命令行与评测逻辑均为本项目自行实现，未复用其他参赛者的代码。
+
 ## 安全
 
 `.env`（含评测密钥与网关令牌）已被 `.gitignore` 忽略，**绝不提交**。服务器侧单独创建 `.env`。
+索引缓存 `*.idx.pkl`（含记忆内容派生数据）同样已被 `.gitignore` 忽略，不入公开仓库。
+公开仓库已核验：跟踪文件中无 `.env` / `*.db` / `*.pkl`。

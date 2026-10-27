@@ -1,6 +1,13 @@
 # 敏感配置
 .env
 *.db
+# SQLite WAL/SHM 边车文件（*.db 通配不到这些后缀；WAL 含未 checkpoint 的记忆数据）
+*.db-wal
+*.db-shm
+*.db-journal
+# 索引缓存（含记忆内容派生数据，可能很大；绝不入公开仓库）
+*.pkl
+*.idx.pkl
 __pycache__/
 *.pyc
 .venv/

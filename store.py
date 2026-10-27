@@ -27,7 +27,7 @@ can could should may might must shall what which who whom whose how why where th
 """.split())
 
 
-def tokenize(text: str):
+def _tokenize_nlp(text: str):
     if not text:
         return []
     text = text.lower()
@@ -45,6 +45,50 @@ def tokenize(text: str):
     return out
 
 
+# ---------- 代码感知分词（Coding 赛道，AML_TOKENIZER=code 启用） ----------
+# 自然语言分词切代码有两处硬伤：
+#   ① camelCase/PascalCase 不切分：getUserById -> ['getuserbyid']，而查询 "get user by id" 切出
+#      ['get','user','by','id']，词面零重叠 -> BM25 得 0 分，整条记忆召不回。
+#   ② 长度<2 的 token 被丢弃：数字 0/1/3、单字符变量 i/x/n 全丢 -> 错误码、版本号、行号失配。
+# code 模式做「超集」切分，保留自然语言切出的整标识符，并额外补 camel/字母数字 边界子词与全部数字。
+# 因是超集，对自然语言查询只增不漏；默认仍走 _tokenize_nlp，保证 Textual 既有版本行为不变。
+_CAMEL_SPLIT = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_CODE_PART = re.compile(r"[A-Za-z]+|\d+|[\u4e00-\u9fff]+")
+
+
+def _tokenize_code(text: str):
+    if not text:
+        return []
+    out = []
+    intern = sys.intern
+    for raw in re.split(r"[^A-Za-z0-9\u4e00-\u9fff]+", text):
+        if not raw:
+            continue
+        whole = raw.lower()
+        if len(whole) >= 2 and whole not in STOPWORDS:
+            out.append(intern(whole))
+        for seg in _CAMEL_SPLIT.split(raw):
+            for p in _CODE_PART.findall(seg):
+                lp = p.lower()
+                if lp == whole:
+                    continue                      # 避免与整标识符重复计数
+                if lp.isdigit():
+                    out.append(intern(lp))        # 数字无条件保留（错误码 500/版本 8/索引 0）
+                elif len(lp) >= 2 and lp not in STOPWORDS:
+                    out.append(intern(lp))
+    return out
+
+
+# 分词器在导入时定死（版本可复现）：nlp（默认，自然语言/Textual）| code（Coding 赛道）
+_TOKENIZER_MODE = os.getenv("AML_TOKENIZER", "nlp").strip().lower()
+
+
+def tokenize(text: str):
+    if _TOKENIZER_MODE == "code":
+        return _tokenize_code(text)
+    return _tokenize_nlp(text)
+
+
 # 中文功能词/高频词（避免误连）。四色卡实体抽取时剔除。
 CJK_STOP = set(
     "我们 你们 他们 她们 它们 自己 这个 那个 这些 那些 什么 怎么 为什么 因为 所以 "
@@ -55,12 +99,35 @@ CJK_STOP = set(
 )
 
 
+def _extract_entities_code(text: str):
+    """代码实体抽取：整标识符 + 错误码/版本号 + 引号串。
+    代码里「同一标识符出现在报错与修复两处」正是最强的关联信号，故实体取完整标识符而非子词。"""
+    if not text:
+        return set()
+    entities = set()
+    intern = sys.intern
+    for raw in re.split(r"[^A-Za-z0-9\u4e00-\u9fff_]+", text):
+        if not raw:
+            continue
+        lp = raw.lower()
+        if len(lp) < 3 or lp in STOPWORDS or lp in CJK_STOP:
+            continue
+        entities.add(intern(lp))
+    for m in re.finditer(r"[\"“『]([^\"”』]{1,24})[\"”』]", text):
+        v = m.group(1).strip().lower()
+        if v:
+            entities.add(intern(v))
+    return entities
+
+
 def extract_entities(text: str):
     """规则化实体抽取（零 LLM、零延迟）。
     返回实体集合：英文专有名词/长词、数字、引号内串、长度>=2 的中文词（剔除功能词）。
     这是四色卡『结构化元数据 + 强制溯源 + 图谱链接』的写入侧实现。"""
     if not text:
         return set()
+    if _TOKENIZER_MODE == "code":
+        return _extract_entities_code(text)
     entities = set()
     intern = sys.intern
     # 1) 英文专有名词（首字母大写）/ 长词 / 数字（含百分比）
@@ -313,16 +380,19 @@ class MemoryStore:
             mtime = int(os.path.getmtime(self.db_path)) if os.path.exists(self.db_path) else 0
         except Exception:
             mtime = 0
-        return (cnt, mx, mtime)
+        return (cnt, mx, mtime, _TOKENIZER_MODE)
 
     def _index_file(self):
-        return self.db_path + ".idx.pkl"
+        # 分词器模式入文件名：nlp / code 两套索引互不覆盖，避免切模式后误用旧缓存
+        suffix = "" if _TOKENIZER_MODE == "nlp" else f".{_TOKENIZER_MODE}"
+        return self.db_path + suffix + ".idx.pkl"
 
     def save_index(self):
         try:
-            cnt, mx, _ = self._index_sig()
+            cnt, mx, _, _ = self._index_sig()
             payload = {
                 "sig": (cnt, mx),
+                "tokenizer": _TOKENIZER_MODE,   # 分词器切换必须使旧缓存失效（nlp 切 code 时索引不可复用）
                 "max_doc_id": max(self.docs.keys(), default=0),
                 "docs": self.docs,
                 "df": dict(self.df),
@@ -348,7 +418,12 @@ class MemoryStore:
                 return False
             with open(p, "rb") as f:
                 payload = pickle.load(f)
-            cnt, mx, _ = self._index_sig()
+            cnt, mx, _, _ = self._index_sig()
+            # 向后兼容：本次改动前落盘的 pkl 无 tokenizer 字段，按 nlp 处理，避免无谓触发全量重建
+            if payload.get("tokenizer", "nlp") != _TOKENIZER_MODE:
+                logger.info(f"[store] index tokenizer mismatch (saved={payload.get('tokenizer')} "
+                            f"now={_TOKENIZER_MODE}) -> rebuild")
+                return False
             saved_max = int(payload.get("max_doc_id", 0))
             if saved_max > mx:
                 logger.warning(f"[store] index newer than db? saved_max={saved_max} db_max={mx} -> rebuild")
